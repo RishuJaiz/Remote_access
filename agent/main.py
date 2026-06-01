@@ -20,7 +20,7 @@ from aiortc import (
     RTCPeerConnection,
     RTCSessionDescription,
 )
-from aiortc.sdp import candidate_from_sdp
+from aiortc.sdp import candidate_from_sdp, candidate_to_sdp
 
 from clipboard_sync import set_send_callback, start_monitor, stop_monitor
 from control import handle_control_message
@@ -41,6 +41,36 @@ def sdp_payload(desc: RTCSessionDescription) -> dict[str, str]:
     return {"type": desc.type, "sdp": desc.sdp}
 
 
+def ice_from_browser(data: dict) -> RTCIceCandidate | None:
+    cand = data.get("candidate")
+    if not cand:
+        return None
+    if isinstance(cand, dict):
+        sdp_line = cand.get("candidate") or ""
+        sdp_mid = cand.get("sdpMid")
+        sdp_mline = cand.get("sdpMLineIndex")
+    else:
+        sdp_line = str(cand)
+        sdp_mid = data.get("sdpMid")
+        sdp_mline = data.get("sdpMLineIndex")
+    if sdp_line.startswith("candidate:"):
+        sdp_line = sdp_line[len("candidate:") :]
+    if not sdp_line.strip():
+        return None
+    ice = candidate_from_sdp(sdp_line)
+    ice.sdpMid = sdp_mid
+    ice.sdpMLineIndex = sdp_mline
+    return ice
+
+
+def ice_to_browser(ice: RTCIceCandidate) -> dict:
+    return {
+        "candidate": f"candidate:{candidate_to_sdp(ice)}",
+        "sdpMid": ice.sdpMid,
+        "sdpMLineIndex": ice.sdpMLineIndex,
+    }
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="RemoteDesk host agent")
     p.add_argument("--session", required=True, help="Session code from dashboard")
@@ -53,6 +83,7 @@ async def run_agent(session_code: str, signal_url: str) -> None:
     pc: RTCPeerConnection | None = None
     negotiating = asyncio.Lock()
     code = session_code.strip().upper()
+    loop = asyncio.get_running_loop()
 
     control_channel = None
 
@@ -78,8 +109,14 @@ async def run_agent(session_code: str, signal_url: str) -> None:
             control_channel = control
 
             def send_on_channel(payload: str) -> None:
-                if control.readyState == "open":
-                    control.send(payload)
+                def _do_send() -> None:
+                    try:
+                        if control.readyState == "open":
+                            control.send(payload)
+                    except Exception as exc:
+                        logger.debug("channel send failed: %s", exc)
+
+                loop.call_soon_threadsafe(_do_send)
 
             set_send_callback(send_on_channel)
 
@@ -97,16 +134,7 @@ async def run_agent(session_code: str, signal_url: str) -> None:
             @pc.on("icecandidate")
             async def on_ice(candidate) -> None:
                 if candidate:
-                    await sio.emit(
-                        "signal:ice",
-                        {
-                            "candidate": {
-                                "candidate": candidate.candidate,
-                                "sdpMid": candidate.sdpMid,
-                                "sdpMLineIndex": candidate.sdpMLineIndex,
-                            }
-                        },
-                    )
+                    await sio.emit("signal:ice", {"candidate": ice_to_browser(candidate)})
 
             offer = await pc.createOffer()
             await pc.setLocalDescription(offer)
@@ -140,18 +168,9 @@ async def run_agent(session_code: str, signal_url: str) -> None:
     async def on_ice(data: dict) -> None:
         if not pc:
             return
-        cand = data.get("candidate")
-        if not cand:
+        ice = ice_from_browser(data)
+        if not ice:
             return
-        if isinstance(cand, dict):
-            ice = RTCIceCandidate(
-                sdpMid=cand.get("sdpMid"),
-                sdpMLineIndex=cand.get("sdpMLineIndex"),
-                candidate=cand.get("candidate"),
-            )
-        else:
-            ice = candidate_from_sdp(cand)
-            ice.sdpMLineIndex = data.get("sdpMLineIndex", ice.sdpMLineIndex)
         try:
             await pc.addIceCandidate(ice)
         except Exception as exc:
