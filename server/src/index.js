@@ -90,6 +90,9 @@ io.on("connection", (socket) => {
   });
 });
 
-httpServer.listen(PORT, () => {
-  console.log(`Signaling server listening on http://localhost:${PORT}`);
+const HOST = process.env.HOST || "0.0.0.0";
+
+httpServer.listen(PORT, HOST, () => {
+  console.log(`Signaling server listening on http://${HOST}:${PORT}`);
+  console.log(`LAN clients: use your Wi-Fi IPv4, e.g. http://172.29.x.x:${PORT}`);
 });

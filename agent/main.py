@@ -176,7 +176,21 @@ async def run_agent(session_code: str, signal_url: str) -> None:
         except Exception as exc:
             logger.debug("ICE add skipped: %s", exc)
 
-    await sio.connect(signal_url, transports=["websocket", "polling"])
+    try:
+        await sio.connect(
+            signal_url,
+            transports=["polling", "websocket"],
+            wait_timeout=20,
+        )
+    except Exception as exc:
+        raise ConnectionError(
+            f"Cannot reach signaling server at {signal_url}. "
+            "On the HUB laptop: run 'npm run dev' in server/, confirm ipconfig IPv4, "
+            "allow Windows Firewall for Node on TCP 3001. "
+            "On this PC: ping the hub IP and Test-NetConnection -Port 3001. "
+            "Campus Wi-Fi often blocks laptop-to-laptop traffic — try a phone hotspot."
+        ) from exc
+
     logger.info("Agent running for session %s — waiting for technician", code)
     try:
         await sio.wait()
