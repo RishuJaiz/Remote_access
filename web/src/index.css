@@ -162,6 +162,13 @@ button:disabled {
 .viewer-surface--remote-keys {
   border-color: #81c995;
   box-shadow: 0 0 0 2px rgba(129, 201, 149, 0.35);
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+.viewer-surface--remote-keys .remote-video {
+  cursor: none;
 }
 
 .remote-keyboard-banner {

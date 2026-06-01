@@ -132,27 +132,27 @@ export default function App() {
               >
                 {viewer.error || statusLabel[viewer.status] || viewer.status}
                 {activeViewCode && ` · ${activeViewCode}`}
-                {viewer.controlReady && viewer.status === "connected" && (
-                  <span className="control-badge"> · control ready</span>
+                {viewer.remoteControl && viewer.status === "connected" && (
+                  <span className="control-badge"> · controlling host</span>
                 )}
               </p>
               {viewer.status === "connected" && (
                 <div className="viewer-actions">
-                  {viewer.remoteKeyboard ? (
+                  {viewer.remoteControl ? (
                     <button
                       type="button"
                       className="secondary"
-                      onClick={viewer.deactivateRemoteKeyboard}
+                      onClick={viewer.pauseRemoteControl}
                     >
-                      Use my keyboard (local)
+                      Pause control (use my PC)
                     </button>
                   ) : (
                     <button
                       type="button"
-                      onClick={viewer.activateRemoteKeyboard}
+                      onClick={viewer.enableRemoteControl}
                       disabled={!viewer.controlReady}
                     >
-                      Control host keyboard
+                      Resume host control
                     </button>
                   )}
                   <button
@@ -188,22 +188,23 @@ export default function App() {
                 </div>
               )}
             </div>
-            {viewer.remoteKeyboard && (
+            {viewer.remoteControl && (
               <p className="remote-keyboard-banner">
-                Keys and shortcuts go to the <strong>host</strong> — Ctrl+Alt+U or{" "}
-                <strong>Use my keyboard</strong> for your PC. Win+* may not work in the
-                browser; use full screen and try, or type on the host.
+                Mouse and keyboard control the <strong>host</strong>. Click the screen to type.
+                Use <strong>Pause control</strong> only when you need your own laptop shortcuts.
               </p>
             )}
             <div
               ref={viewer.surfaceRef}
               className={`viewer-surface${
-                viewer.remoteKeyboard ? " viewer-surface--remote-keys" : ""
+                viewer.remoteControl ? " viewer-surface--remote-keys" : ""
               }`}
               tabIndex={0}
               role="application"
               aria-label="Remote desktop control"
+              onMouseEnter={viewer.onSurfaceMouseEnter}
               onMouseDown={viewer.onSurfaceMouseDown}
+              onContextMenu={viewer.onContextMenu}
             >
               <video
                 ref={viewer.videoRef}
@@ -211,21 +212,21 @@ export default function App() {
                 autoPlay
                 playsInline
                 muted
+                draggable={false}
                 onMouseMove={viewer.onVideoMouseMove}
                 onMouseDown={viewer.onVideoMouseDown}
                 onMouseUp={viewer.onVideoMouseUp}
                 onWheel={viewer.onVideoWheel}
+                onContextMenu={viewer.onContextMenu}
               />
             </div>
             <p className="hint">
-              <strong>Clipboard:</strong> Copy on the host → appears on your hub. Ctrl+V in
-              remote mode pastes your hub clipboard to the host. Use{" "}
-              <strong>Hub → Host clipboard</strong> to push without typing. Allow clipboard
-              when the browser asks.
+              <strong>Clipboard:</strong> Copy on the host syncs to your hub. Ctrl+V pastes your
+              hub clipboard on the host. Allow clipboard when the browser asks.
             </p>
             <p className="hint">
-              Click the remote screen or <strong>Control host keyboard</strong> for shortcuts
-              on the host. <strong>Use my keyboard (local)</strong> or Ctrl+Alt+U for your PC.
+              Control starts automatically when connected. Drag and scroll work on the remote
+              screen; keyboard works after clicking the video once. Esc exits pointer lock only.
             </p>
           </div>
         )}

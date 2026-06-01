@@ -170,6 +170,11 @@ def _keydown(msg: dict) -> None:
             schedule_push_after_copy()
         return
 
+    if msg.get("repeat"):
+        if len(py_key) == 1:
+            pyautogui.write(py_key, interval=0)
+        return
+
     if len(py_key) == 1:
         pyautogui.write(py_key, interval=0)
     else:

@@ -8,33 +8,38 @@ import {
   resetClipboardSyncState,
 } from "../lib/clipboardSync.js";
 
-/** Ctrl+Alt+U — return keyboard to your PC (not sent to host). */
-function isReleaseChord(e) {
-  return e.ctrlKey && e.altKey && (e.key === "u" || e.key === "U");
+function isHubLocalTarget(target) {
+  if (!target?.closest) return false;
+  if (target.closest(".viewer-stage")) return false;
+  return Boolean(
+    target.closest("input, textarea, select, button, a, [contenteditable='true']")
+  );
 }
 
 export function useViewerSession(sessionCode) {
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState(null);
   const [controlReady, setControlReady] = useState(false);
-  const [remoteKeyboard, setRemoteKeyboard] = useState(false);
+  const [remoteControl, setRemoteControl] = useState(false);
   const [clipboardSynced, setClipboardSynced] = useState(false);
   const videoRef = useRef(null);
   const surfaceRef = useRef(null);
   const pcRef = useRef(null);
   const controlRef = useRef(null);
   const socketRef = useRef(null);
-  const remoteKeyboardRef = useRef(false);
+  const remoteControlRef = useRef(false);
+  const pointerDownRef = useRef(false);
 
   useEffect(() => {
-    remoteKeyboardRef.current = remoteKeyboard;
-  }, [remoteKeyboard]);
+    remoteControlRef.current = remoteControl;
+  }, [remoteControl]);
 
   const cleanup = useCallback(() => {
+    pointerDownRef.current = false;
     controlRef.current?.close();
     controlRef.current = null;
     setControlReady(false);
-    setRemoteKeyboard(false);
+    setRemoteControl(false);
     setClipboardSynced(false);
     resetClipboardSyncState();
     pcRef.current?.close();
@@ -55,9 +60,19 @@ export function useViewerSession(sessionCode) {
     sendControl({ type: "release" });
   }, [sendControl]);
 
-  const deactivateRemoteKeyboard = useCallback(() => {
-    setRemoteKeyboard(false);
+  const enableRemoteControl = useCallback(() => {
+    if (!controlRef.current || controlRef.current.readyState !== "open") return;
+    setRemoteControl(true);
+    requestAnimationFrame(() => surfaceRef.current?.focus({ preventScroll: true }));
+  }, []);
+
+  const pauseRemoteControl = useCallback(() => {
+    setRemoteControl(false);
+    pointerDownRef.current = false;
     sendRelease();
+    if (document.pointerLockElement === surfaceRef.current) {
+      document.exitPointerLock();
+    }
   }, [sendRelease]);
 
   const handleChannelMessage = useCallback((ev) => {
@@ -69,7 +84,7 @@ export function useViewerSession(sessionCode) {
           .catch(() => {});
       }
     } catch {
-      /* not JSON — ignore */
+      /* ignore */
     }
   }, []);
 
@@ -77,12 +92,25 @@ export function useViewerSession(sessionCode) {
     return pushHubClipboardToHost(sendControl).then(() => setClipboardSynced(true));
   }, [sendControl]);
 
-  const activateRemoteKeyboard = useCallback(() => {
-    if (!controlRef.current || controlRef.current.readyState !== "open") return;
-    setRemoteKeyboard(true);
-    surfaceRef.current?.focus();
-    syncHubClipboardToHost();
-  }, [syncHubClipboardToHost]);
+  const coordsFromEvent = useCallback((clientX, clientY) => {
+    const video = videoRef.current;
+    if (!video) return null;
+    const rect = video.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    return {
+      x: Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)),
+      y: Math.min(1, Math.max(0, (clientY - rect.top) / rect.height)),
+    };
+  }, []);
+
+  const sendMouseAt = useCallback(
+    (clientX, clientY, extra = {}) => {
+      const pos = coordsFromEvent(clientX, clientY);
+      if (!pos) return;
+      sendControl({ ...pos, ...extra });
+    },
+    [coordsFromEvent, sendControl]
+  );
 
   useEffect(() => {
     if (!sessionCode) return undefined;
@@ -168,7 +196,7 @@ export function useViewerSession(sessionCode) {
         try {
           await pcRef.current.addIceCandidate(candidate);
         } catch {
-          /* ignore late candidates */
+          /* ignore */
         }
       }
     });
@@ -180,19 +208,20 @@ export function useViewerSession(sessionCode) {
   }, [sessionCode, cleanup, handleChannelMessage]);
 
   useEffect(() => {
-    if (!remoteKeyboard) return undefined;
+    if (status === "connected" && controlReady) {
+      enableRemoteControl();
+    }
+  }, [status, controlReady, enableRemoteControl]);
+
+  useEffect(() => {
+    if (!remoteControl) return undefined;
 
     const channelOpen = () =>
       controlRef.current && controlRef.current.readyState === "open";
 
     const forwardKeyDown = (e) => {
-      if (!channelOpen()) return;
-      if (isReleaseChord(e)) {
-        e.preventDefault();
-        e.stopPropagation();
-        deactivateRemoteKeyboard();
-        return;
-      }
+      if (!channelOpen() || !remoteControlRef.current) return;
+      if (isHubLocalTarget(e.target)) return;
 
       e.preventDefault();
       e.stopPropagation();
@@ -205,12 +234,8 @@ export function useViewerSession(sessionCode) {
         shiftKey: e.shiftKey,
         altKey: e.altKey,
         metaKey: e.metaKey,
+        repeat: e.repeat,
       };
-
-      if (e.ctrlKey && (e.key === "c" || e.key === "C")) {
-        sendControl(payload);
-        return;
-      }
 
       if (e.ctrlKey && (e.key === "v" || e.key === "V")) {
         navigator.clipboard
@@ -228,21 +253,13 @@ export function useViewerSession(sessionCode) {
         return;
       }
 
-      if (e.ctrlKey && (e.key === "x" || e.key === "X")) {
-        sendControl(payload);
-        return;
-      }
-
       sendControl(payload);
     };
 
     const forwardKeyUp = (e) => {
-      if (!channelOpen() || !remoteKeyboardRef.current) return;
-      if (isReleaseChord(e)) {
-        e.preventDefault();
-        e.stopPropagation();
-        return;
-      }
+      if (!channelOpen() || !remoteControlRef.current) return;
+      if (isHubLocalTarget(e.target)) return;
+
       e.preventDefault();
       e.stopPropagation();
       sendControl({
@@ -258,90 +275,111 @@ export function useViewerSession(sessionCode) {
       window.removeEventListener("keydown", forwardKeyDown, true);
       window.removeEventListener("keyup", forwardKeyUp, true);
     };
-  }, [remoteKeyboard, sendControl, deactivateRemoteKeyboard]);
+  }, [remoteControl, sendControl]);
 
   useEffect(() => {
-    if (!remoteKeyboard) return undefined;
+    if (!controlReady) return undefined;
 
-    const onPointerDown = (e) => {
-      const stage = surfaceRef.current?.closest(".viewer-stage");
-      if (stage && !stage.contains(e.target)) {
-        deactivateRemoteKeyboard();
-      }
+    const onWindowMouseUp = (e) => {
+      if (!pointerDownRef.current) return;
+      pointerDownRef.current = false;
+      sendMouseAt(e.clientX, e.clientY, { type: "mouseup", button: e.button });
     };
 
-    document.addEventListener("pointerdown", onPointerDown, true);
-    return () => document.removeEventListener("pointerdown", onPointerDown, true);
-  }, [remoteKeyboard, deactivateRemoteKeyboard]);
-
-  const normalizedCoords = useCallback((el, clientX, clientY) => {
-    const rect = el.getBoundingClientRect();
-    const x = (clientX - rect.left) / rect.width;
-    const y = (clientY - rect.top) / rect.height;
-    return {
-      x: Math.min(1, Math.max(0, x)),
-      y: Math.min(1, Math.max(0, y)),
+    const onWindowMouseMove = (e) => {
+      if (!pointerDownRef.current) return;
+      sendMouseAt(e.clientX, e.clientY, { type: "mousemove" });
     };
+
+    window.addEventListener("mouseup", onWindowMouseUp, true);
+    window.addEventListener("mousemove", onWindowMouseMove, true);
+    return () => {
+      window.removeEventListener("mouseup", onWindowMouseUp, true);
+      window.removeEventListener("mousemove", onWindowMouseMove, true);
+    };
+  }, [controlReady, sendMouseAt]);
+
+  const onSurfaceMouseEnter = useCallback(() => {
+    if (remoteControlRef.current) {
+      surfaceRef.current?.focus({ preventScroll: true });
+    }
   }, []);
 
   const onSurfaceMouseDown = useCallback(
     (e) => {
-      if (e.target.closest(".viewer-toolbar")) return;
-      activateRemoteKeyboard();
+      if (e.button !== 0 || e.target.closest(".viewer-toolbar")) return;
+      enableRemoteControl();
+      surfaceRef.current?.focus({ preventScroll: true });
+      try {
+        surfaceRef.current?.requestPointerLock?.();
+      } catch {
+        /* optional */
+      }
     },
-    [activateRemoteKeyboard]
+    [enableRemoteControl]
   );
 
   const onVideoMouseMove = useCallback(
     (e) => {
-      const { x, y } = normalizedCoords(e.currentTarget, e.clientX, e.clientY);
-      sendControl({ type: "mousemove", x, y });
+      if (!controlReady) return;
+      sendMouseAt(e.clientX, e.clientY, { type: "mousemove" });
     },
-    [normalizedCoords, sendControl]
+    [controlReady, sendMouseAt]
   );
 
   const onVideoMouseDown = useCallback(
     (e) => {
+      if (!controlReady) return;
       e.preventDefault();
-      const { x, y } = normalizedCoords(e.currentTarget, e.clientX, e.clientY);
-      sendControl({ type: "mousedown", button: e.button, x, y });
+      pointerDownRef.current = true;
+      sendMouseAt(e.clientX, e.clientY, { type: "mousedown", button: e.button });
     },
-    [normalizedCoords, sendControl]
+    [controlReady, sendMouseAt]
   );
 
   const onVideoMouseUp = useCallback(
     (e) => {
-      const { x, y } = normalizedCoords(e.currentTarget, e.clientX, e.clientY);
-      sendControl({ type: "mouseup", button: e.button, x, y });
+      if (!controlReady) return;
+      pointerDownRef.current = false;
+      sendMouseAt(e.clientX, e.clientY, { type: "mouseup", button: e.button });
     },
-    [normalizedCoords, sendControl]
+    [controlReady, sendMouseAt]
   );
 
   const onVideoWheel = useCallback(
     (e) => {
-      if (!remoteKeyboardRef.current) return;
+      if (!controlReady) return;
       e.preventDefault();
       sendControl({ type: "wheel", deltaY: e.deltaY });
     },
-    [sendControl]
+    [controlReady, sendControl]
   );
+
+  const onContextMenu = useCallback((e) => {
+    e.preventDefault();
+  }, []);
 
   return {
     status,
     error,
     controlReady,
-    remoteKeyboard,
+    remoteControl,
+    remoteKeyboard: remoteControl,
     clipboardSynced,
     syncHubClipboardToHost,
     videoRef,
     surfaceRef,
-    activateRemoteKeyboard,
-    deactivateRemoteKeyboard,
+    enableRemoteControl,
+    activateRemoteKeyboard: enableRemoteControl,
+    pauseRemoteControl,
+    deactivateRemoteKeyboard: pauseRemoteControl,
+    onSurfaceMouseEnter,
     onSurfaceMouseDown,
     onVideoMouseMove,
     onVideoMouseDown,
     onVideoMouseUp,
     onVideoWheel,
+    onContextMenu,
     disconnect: cleanup,
   };
 }
