@@ -22,6 +22,7 @@ from aiortc import (
 )
 from aiortc.sdp import candidate_from_sdp
 
+from clipboard_sync import set_send_callback, start_monitor, stop_monitor
 from control import handle_control_message
 from screen_track import ScreenCaptureTrack
 
@@ -53,14 +54,19 @@ async def run_agent(session_code: str, signal_url: str) -> None:
     negotiating = asyncio.Lock()
     code = session_code.strip().upper()
 
+    control_channel = None
+
     async def close_pc() -> None:
-        nonlocal pc
+        nonlocal pc, control_channel
+        stop_monitor()
+        set_send_callback(None)
+        control_channel = None
         if pc:
             await pc.close()
             pc = None
 
     async def start_offer() -> None:
-        nonlocal pc
+        nonlocal pc, control_channel
         async with negotiating:
             if pc is not None:
                 return
@@ -69,6 +75,18 @@ async def run_agent(session_code: str, signal_url: str) -> None:
             pc.addTrack(ScreenCaptureTrack())
 
             control = pc.createDataChannel("control")
+            control_channel = control
+
+            def send_on_channel(payload: str) -> None:
+                if control.readyState == "open":
+                    control.send(payload)
+
+            set_send_callback(send_on_channel)
+
+            @control.on("open")
+            def on_control_open() -> None:
+                logger.info("Control channel open — clipboard sync active")
+                start_monitor()
 
             @control.on("message")
             def on_control(message: str | bytes) -> None:

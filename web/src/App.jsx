@@ -155,6 +155,33 @@ export default function App() {
                       Control host keyboard
                     </button>
                   )}
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => viewer.syncHubClipboardToHost()}
+                    disabled={!viewer.controlReady}
+                    title="Copy your laptop clipboard to the host"
+                  >
+                    Hub → Host clipboard
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.readText();
+                        viewer.activateRemoteKeyboard();
+                      } catch {
+                        alert(
+                          "Allow clipboard access in the browser (click the lock icon in the address bar)."
+                        );
+                      }
+                    }}
+                    disabled={!viewer.controlReady}
+                    title="Read host clipboard via sync after copy on host"
+                  >
+                    Sync clipboards
+                  </button>
                   <button type="button" onClick={toggleMaximize}>
                     {isMaximized ? "Exit full screen" : "Maximize screen"}
                   </button>
@@ -191,10 +218,14 @@ export default function App() {
               />
             </div>
             <p className="hint">
-              Click the remote screen or <strong>Control host keyboard</strong> so Ctrl+C/V
-              and other shortcuts affect the host. Click outside or{" "}
-              <strong>Use my keyboard (local)</strong> for your laptop. Ctrl+Alt+U also
-              returns the keyboard to you.
+              <strong>Clipboard:</strong> Copy on the host → appears on your hub. Ctrl+V in
+              remote mode pastes your hub clipboard to the host. Use{" "}
+              <strong>Hub → Host clipboard</strong> to push without typing. Allow clipboard
+              when the browser asks.
+            </p>
+            <p className="hint">
+              Click the remote screen or <strong>Control host keyboard</strong> for shortcuts
+              on the host. <strong>Use my keyboard (local)</strong> or Ctrl+Alt+U for your PC.
             </p>
           </div>
         )}

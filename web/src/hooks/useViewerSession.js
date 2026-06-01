@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import { ICE_SERVERS, SIGNAL_URL } from "../webrtc/config.js";
+import {
+  applyHostClipboard,
+  markHubClipboardSent,
+  pushHubClipboardToHost,
+  resetClipboardSyncState,
+} from "../lib/clipboardSync.js";
 
 /** Ctrl+Alt+U — return keyboard to your PC (not sent to host). */
 function isReleaseChord(e) {
@@ -12,6 +18,7 @@ export function useViewerSession(sessionCode) {
   const [error, setError] = useState(null);
   const [controlReady, setControlReady] = useState(false);
   const [remoteKeyboard, setRemoteKeyboard] = useState(false);
+  const [clipboardSynced, setClipboardSynced] = useState(false);
   const videoRef = useRef(null);
   const surfaceRef = useRef(null);
   const pcRef = useRef(null);
@@ -28,6 +35,8 @@ export function useViewerSession(sessionCode) {
     controlRef.current = null;
     setControlReady(false);
     setRemoteKeyboard(false);
+    setClipboardSynced(false);
+    resetClipboardSyncState();
     pcRef.current?.close();
     pcRef.current = null;
     socketRef.current?.disconnect();
@@ -51,11 +60,29 @@ export function useViewerSession(sessionCode) {
     sendRelease();
   }, [sendRelease]);
 
+  const handleChannelMessage = useCallback((ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === "clipboard" && msg.from === "host" && msg.text) {
+        applyHostClipboard(msg.text)
+          .then(() => setClipboardSynced(true))
+          .catch(() => {});
+      }
+    } catch {
+      /* not JSON — ignore */
+    }
+  }, []);
+
+  const syncHubClipboardToHost = useCallback(() => {
+    return pushHubClipboardToHost(sendControl).then(() => setClipboardSynced(true));
+  }, [sendControl]);
+
   const activateRemoteKeyboard = useCallback(() => {
     if (!controlRef.current || controlRef.current.readyState !== "open") return;
     setRemoteKeyboard(true);
     surfaceRef.current?.focus();
-  }, []);
+    syncHubClipboardToHost();
+  }, [syncHubClipboardToHost]);
 
   useEffect(() => {
     if (!sessionCode) return undefined;
@@ -82,6 +109,7 @@ export function useViewerSession(sessionCode) {
         const ch = ev.channel;
         const bind = () => {
           controlRef.current = ch;
+          ch.onmessage = handleChannelMessage;
           setControlReady(true);
         };
         if (ch.readyState === "open") bind();
@@ -149,7 +177,7 @@ export function useViewerSession(sessionCode) {
       cleanup();
       setStatus("idle");
     };
-  }, [sessionCode, cleanup]);
+  }, [sessionCode, cleanup, handleChannelMessage]);
 
   useEffect(() => {
     if (!remoteKeyboard) return undefined;
@@ -179,14 +207,29 @@ export function useViewerSession(sessionCode) {
         metaKey: e.metaKey,
       };
 
+      if (e.ctrlKey && (e.key === "c" || e.key === "C")) {
+        sendControl(payload);
+        return;
+      }
+
       if (e.ctrlKey && (e.key === "v" || e.key === "V")) {
         navigator.clipboard
           .readText()
           .then((text) => {
-            if (text) sendControl({ type: "paste", text });
-            else sendControl(payload);
+            if (text) {
+              markHubClipboardSent(text);
+              sendControl({ type: "clipboard", text, from: "hub" });
+              sendControl({ type: "paste" });
+            } else {
+              sendControl(payload);
+            }
           })
           .catch(() => sendControl(payload));
+        return;
+      }
+
+      if (e.ctrlKey && (e.key === "x" || e.key === "X")) {
+        sendControl(payload);
         return;
       }
 
@@ -288,6 +331,8 @@ export function useViewerSession(sessionCode) {
     error,
     controlReady,
     remoteKeyboard,
+    clipboardSynced,
+    syncHubClipboardToHost,
     videoRef,
     surfaceRef,
     activateRemoteKeyboard,

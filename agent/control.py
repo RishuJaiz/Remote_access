@@ -3,6 +3,8 @@ import logging
 
 import pyautogui
 
+from clipboard_sync import apply_hub_clipboard, schedule_push_after_copy
+
 logger = logging.getLogger(__name__)
 
 pyautogui.FAILSAFE = False
@@ -112,10 +114,13 @@ def handle_control_message(raw: str) -> None:
             delta = msg.get("deltaY", 0)
             clicks = int(-delta / 100) or (-1 if delta > 0 else 1)
             pyautogui.scroll(clicks, _pause=False)
+        elif kind == "clipboard":
+            apply_hub_clipboard(msg.get("text") or "")
         elif kind == "paste":
             text = msg.get("text") or ""
             if text:
-                pyautogui.write(text, interval=0)
+                apply_hub_clipboard(text)
+            pyautogui.hotkey("ctrl", "v", _pause=False)
         elif kind == "release":
             _release_all_modifiers()
         elif kind == "keydown":
@@ -161,6 +166,8 @@ def _keydown(msg: dict) -> None:
     mods = _active_modifiers(msg)
     if mods:
         _tap_combo(mods, py_key)
+        if mods == ["ctrl"] and py_key in ("c", "x"):
+            schedule_push_after_copy()
         return
 
     if len(py_key) == 1:
