@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import { SIGNAL_URL } from "./webrtc/config.js";
 import { useViewerSession } from "./hooks/useViewerSession.js";
@@ -8,8 +8,31 @@ export default function App() {
   const [joinCode, setJoinCode] = useState("");
   const [activeViewCode, setActiveViewCode] = useState(null);
   const [createError, setCreateError] = useState(null);
+  const [isMaximized, setIsMaximized] = useState(false);
+  const viewerStageRef = useRef(null);
 
   const viewer = useViewerSession(activeViewCode);
+
+  useEffect(() => {
+    if (!isMaximized) return undefined;
+    const onFsChange = () => {
+      if (!document.fullscreenElement) setIsMaximized(false);
+    };
+    document.addEventListener("fullscreenchange", onFsChange);
+    return () => document.removeEventListener("fullscreenchange", onFsChange);
+  }, [isMaximized]);
+
+  const toggleMaximize = useCallback(async () => {
+    const el = viewerStageRef.current;
+    if (!el) return;
+    if (!document.fullscreenElement) {
+      await el.requestFullscreen?.();
+      setIsMaximized(true);
+    } else {
+      await document.exitFullscreen?.();
+      setIsMaximized(false);
+    }
+  }, []);
 
   const createSession = useCallback(() => {
     setCreateError(null);
@@ -97,31 +120,81 @@ export default function App() {
         </form>
 
         {activeViewCode && (
-          <div className="viewer-wrap">
-            <p
-              className={`status ${
-                viewer.status === "connected" ? "ok" : viewer.error ? "err" : ""
+          <div
+            ref={viewerStageRef}
+            className={`viewer-stage${isMaximized ? " viewer-stage--maximized" : ""}`}
+          >
+            <div className="viewer-toolbar">
+              <p
+                className={`status viewer-status ${
+                  viewer.status === "connected" ? "ok" : viewer.error ? "err" : ""
+                }`}
+              >
+                {viewer.error || statusLabel[viewer.status] || viewer.status}
+                {activeViewCode && ` · ${activeViewCode}`}
+                {viewer.controlReady && viewer.status === "connected" && (
+                  <span className="control-badge"> · control ready</span>
+                )}
+              </p>
+              {viewer.status === "connected" && (
+                <div className="viewer-actions">
+                  {viewer.remoteKeyboard ? (
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={viewer.deactivateRemoteKeyboard}
+                    >
+                      Use my keyboard (local)
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={viewer.activateRemoteKeyboard}
+                      disabled={!viewer.controlReady}
+                    >
+                      Control host keyboard
+                    </button>
+                  )}
+                  <button type="button" onClick={toggleMaximize}>
+                    {isMaximized ? "Exit full screen" : "Maximize screen"}
+                  </button>
+                </div>
+              )}
+            </div>
+            {viewer.remoteKeyboard && (
+              <p className="remote-keyboard-banner">
+                Keys and shortcuts go to the <strong>host</strong> — Ctrl+Alt+U or{" "}
+                <strong>Use my keyboard</strong> for your PC. Win+* may not work in the
+                browser; use full screen and try, or type on the host.
+              </p>
+            )}
+            <div
+              ref={viewer.surfaceRef}
+              className={`viewer-surface${
+                viewer.remoteKeyboard ? " viewer-surface--remote-keys" : ""
               }`}
-            >
-              {viewer.error || statusLabel[viewer.status] || viewer.status}
-              {activeViewCode && ` · ${activeViewCode}`}
-            </p>
-            <video
-              ref={viewer.videoRef}
-              className="remote-video"
               tabIndex={0}
-              autoPlay
-              playsInline
-              muted
-              onMouseMove={viewer.onVideoMouseMove}
-              onMouseDown={viewer.onVideoMouseDown}
-              onMouseUp={viewer.onVideoMouseUp}
-              onWheel={viewer.onVideoWheel}
-              onKeyDown={viewer.onVideoKeyDown}
-            />
+              role="application"
+              aria-label="Remote desktop control"
+              onMouseDown={viewer.onSurfaceMouseDown}
+            >
+              <video
+                ref={viewer.videoRef}
+                className="remote-video"
+                autoPlay
+                playsInline
+                muted
+                onMouseMove={viewer.onVideoMouseMove}
+                onMouseDown={viewer.onVideoMouseDown}
+                onMouseUp={viewer.onVideoMouseUp}
+                onWheel={viewer.onVideoWheel}
+              />
+            </div>
             <p className="hint">
-              Click the video to focus, then move, click, scroll, and type to control
-              the remote desktop.
+              Click the remote screen or <strong>Control host keyboard</strong> so Ctrl+C/V
+              and other shortcuts affect the host. Click outside or{" "}
+              <strong>Use my keyboard (local)</strong> for your laptop. Ctrl+Alt+U also
+              returns the keyboard to you.
             </p>
           </div>
         )}

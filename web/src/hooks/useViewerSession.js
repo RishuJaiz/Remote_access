@@ -2,22 +2,59 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import { ICE_SERVERS, SIGNAL_URL } from "../webrtc/config.js";
 
+/** Ctrl+Alt+U — return keyboard to your PC (not sent to host). */
+function isReleaseChord(e) {
+  return e.ctrlKey && e.altKey && (e.key === "u" || e.key === "U");
+}
+
 export function useViewerSession(sessionCode) {
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState(null);
+  const [controlReady, setControlReady] = useState(false);
+  const [remoteKeyboard, setRemoteKeyboard] = useState(false);
   const videoRef = useRef(null);
+  const surfaceRef = useRef(null);
   const pcRef = useRef(null);
   const controlRef = useRef(null);
   const socketRef = useRef(null);
+  const remoteKeyboardRef = useRef(false);
+
+  useEffect(() => {
+    remoteKeyboardRef.current = remoteKeyboard;
+  }, [remoteKeyboard]);
 
   const cleanup = useCallback(() => {
     controlRef.current?.close();
     controlRef.current = null;
+    setControlReady(false);
+    setRemoteKeyboard(false);
     pcRef.current?.close();
     pcRef.current = null;
     socketRef.current?.disconnect();
     socketRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
+  }, []);
+
+  const sendControl = useCallback((payload) => {
+    const ch = controlRef.current;
+    if (ch?.readyState === "open") {
+      ch.send(JSON.stringify(payload));
+    }
+  }, []);
+
+  const sendRelease = useCallback(() => {
+    sendControl({ type: "release" });
+  }, [sendControl]);
+
+  const deactivateRemoteKeyboard = useCallback(() => {
+    setRemoteKeyboard(false);
+    sendRelease();
+  }, [sendRelease]);
+
+  const activateRemoteKeyboard = useCallback(() => {
+    if (!controlRef.current || controlRef.current.readyState !== "open") return;
+    setRemoteKeyboard(true);
+    surfaceRef.current?.focus();
   }, []);
 
   useEffect(() => {
@@ -41,9 +78,14 @@ export function useViewerSession(sessionCode) {
       };
 
       pc.ondatachannel = (ev) => {
-        if (ev.channel.label === "control") {
-          controlRef.current = ev.channel;
-        }
+        if (ev.channel.label !== "control") return;
+        const ch = ev.channel;
+        const bind = () => {
+          controlRef.current = ch;
+          setControlReady(true);
+        };
+        if (ch.readyState === "open") bind();
+        else ch.onopen = bind;
       };
 
       pc.onicecandidate = (ev) => {
@@ -109,12 +151,85 @@ export function useViewerSession(sessionCode) {
     };
   }, [sessionCode, cleanup]);
 
-  const sendControl = useCallback((payload) => {
-    const ch = controlRef.current;
-    if (ch?.readyState === "open") {
-      ch.send(JSON.stringify(payload));
-    }
-  }, []);
+  useEffect(() => {
+    if (!remoteKeyboard) return undefined;
+
+    const channelOpen = () =>
+      controlRef.current && controlRef.current.readyState === "open";
+
+    const forwardKeyDown = (e) => {
+      if (!channelOpen()) return;
+      if (isReleaseChord(e)) {
+        e.preventDefault();
+        e.stopPropagation();
+        deactivateRemoteKeyboard();
+        return;
+      }
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      const payload = {
+        type: "keydown",
+        key: e.key,
+        code: e.code,
+        ctrlKey: e.ctrlKey,
+        shiftKey: e.shiftKey,
+        altKey: e.altKey,
+        metaKey: e.metaKey,
+      };
+
+      if (e.ctrlKey && (e.key === "v" || e.key === "V")) {
+        navigator.clipboard
+          .readText()
+          .then((text) => {
+            if (text) sendControl({ type: "paste", text });
+            else sendControl(payload);
+          })
+          .catch(() => sendControl(payload));
+        return;
+      }
+
+      sendControl(payload);
+    };
+
+    const forwardKeyUp = (e) => {
+      if (!channelOpen() || !remoteKeyboardRef.current) return;
+      if (isReleaseChord(e)) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      sendControl({
+        type: "keyup",
+        key: e.key,
+        code: e.code,
+      });
+    };
+
+    window.addEventListener("keydown", forwardKeyDown, true);
+    window.addEventListener("keyup", forwardKeyUp, true);
+    return () => {
+      window.removeEventListener("keydown", forwardKeyDown, true);
+      window.removeEventListener("keyup", forwardKeyUp, true);
+    };
+  }, [remoteKeyboard, sendControl, deactivateRemoteKeyboard]);
+
+  useEffect(() => {
+    if (!remoteKeyboard) return undefined;
+
+    const onPointerDown = (e) => {
+      const stage = surfaceRef.current?.closest(".viewer-stage");
+      if (stage && !stage.contains(e.target)) {
+        deactivateRemoteKeyboard();
+      }
+    };
+
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => document.removeEventListener("pointerdown", onPointerDown, true);
+  }, [remoteKeyboard, deactivateRemoteKeyboard]);
 
   const normalizedCoords = useCallback((el, clientX, clientY) => {
     const rect = el.getBoundingClientRect();
@@ -125,6 +240,14 @@ export function useViewerSession(sessionCode) {
       y: Math.min(1, Math.max(0, y)),
     };
   }, []);
+
+  const onSurfaceMouseDown = useCallback(
+    (e) => {
+      if (e.target.closest(".viewer-toolbar")) return;
+      activateRemoteKeyboard();
+    },
+    [activateRemoteKeyboard]
+  );
 
   const onVideoMouseMove = useCallback(
     (e) => {
@@ -153,23 +276,9 @@ export function useViewerSession(sessionCode) {
 
   const onVideoWheel = useCallback(
     (e) => {
+      if (!remoteKeyboardRef.current) return;
       e.preventDefault();
       sendControl({ type: "wheel", deltaY: e.deltaY });
-    },
-    [sendControl]
-  );
-
-  const onVideoKeyDown = useCallback(
-    (e) => {
-      e.preventDefault();
-      sendControl({
-        type: "keydown",
-        key: e.key,
-        code: e.code,
-        ctrlKey: e.ctrlKey,
-        shiftKey: e.shiftKey,
-        altKey: e.altKey,
-      });
     },
     [sendControl]
   );
@@ -177,12 +286,17 @@ export function useViewerSession(sessionCode) {
   return {
     status,
     error,
+    controlReady,
+    remoteKeyboard,
     videoRef,
+    surfaceRef,
+    activateRemoteKeyboard,
+    deactivateRemoteKeyboard,
+    onSurfaceMouseDown,
     onVideoMouseMove,
     onVideoMouseDown,
     onVideoMouseUp,
     onVideoWheel,
-    onVideoKeyDown,
     disconnect: cleanup,
   };
 }
