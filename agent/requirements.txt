@@ -1,0 +1,7 @@
+aiortc>=1.9.0
+aiohttp>=3.10.0
+python-socketio[asyncio_client]>=5.11.0
+mss>=9.0.2
+pyautogui>=0.9.54
+av>=12.0.0
+numpy>=2.0.0
